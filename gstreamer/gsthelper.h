@@ -39,6 +39,7 @@ public:
     static QByteArray property(GstElement *elem, const char *propertyName);
     static QByteArray name(GstObject *elem);
     static GstElement* createPluggablePlaybin();
+    static QString stringFromGCharPtr(char *s);
 };
 
 } // ns Gstreamer

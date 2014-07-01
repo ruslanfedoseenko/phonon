@@ -170,7 +170,10 @@ Q_SIGNALS:
     void aboutToFinish();
     void totalTimeChanged(qint64 length);
     void bufferStatus(int percentFilled);
-
+    void audioChannelChanged(int);
+    void availableAudioChannelsChanged();
+    void subtitleChanged(int);
+    void availableSubtitlesChanged();
     QMultiMap<QString, QString> metaData();
     void setMetaData(QMultiMap<QString, QString> newData);
 
@@ -235,6 +238,20 @@ private:
     void _iface_setCurrentTitle(int title);
     void setTrack(int title);
 
+    QList<AudioChannelDescription> m_audioChanels;
+    int m_curentAudioChannelIndex;
+    QList<AudioChannelDescription> _iface_availableAudioChannels() const;
+    AudioChannelDescription _iface_currentAudioChannel();
+    void _iface_setCurrentAudioChannel(const AudioChannelDescription& channel);
+    void setAudioChannels(const QList<AudioChannelDescription> &channels);
+
+    QList<SubtitleDescription> m_subtitles;
+    int m_curentSubtitleIndex;
+    QList<SubtitleDescription> _iface_availableSubtitles() const;
+    SubtitleDescription _iface_currentSubtitle();
+    void _iface_setCurrentSubtitle(const SubtitleDescription& subtitle);
+    void setSubtitles(const QList<SubtitleDescription> &subtitiles);
+
     bool m_resumeState;
     State m_oldState;
     quint64 m_oldPos;
@@ -252,6 +269,8 @@ private:
 
     qint64 m_posAtSeek;
 
+
+
     bool m_prefinishMarkReachedNotEmitted;
     bool m_aboutToFinishEmitted;
     bool m_loading;
@@ -259,6 +278,7 @@ private:
 
     GstElement *m_datasource;
     GstElement *m_decodebin;
+    GstElement *m_playerbin;
 
     GstElement *m_audioPipe;
     GstElement *m_videoPipe;

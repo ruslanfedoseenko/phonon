@@ -162,6 +162,12 @@ GstElement* GstHelper::createPluggablePlaybin()
     g_object_set (G_OBJECT(playbin), "video-sink", videoSinkBin, (const char*)NULL);
     return playbin;
 }
+QString GstHelper::stringFromGCharPtr(char *s)
+{
+    QString str = QString::fromUtf8(s);
+    g_free(s);
+    return str;
+}
 
 
 } //namespace Gstreamer

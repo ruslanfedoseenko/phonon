@@ -24,6 +24,7 @@
 #include "backend.h"
 #include "streamreader.h"
 #include "phononsrc.h"
+#include "gsthelper.h"
 #include <QtCore>
 #include <QtCore/QTimer>
 #include <QtCore/QVector>
@@ -532,7 +533,12 @@ void MediaObject::createPipeline()
     gst_element_add_pad (m_videoGraph, gst_ghost_pad_new ("sink", videopad));
     gst_object_unref (videopad);
 
-    if (m_pipeline && m_decodebin && m_audioGraph && m_videoGraph && m_audioPipe && m_videoPipe)
+    m_playerbin = GstHelper::createPluggablePlaybin();
+    g_object_get (m_playerbin, "flags", &flags, NULL);
+    flags |= GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO | GST_PLAY_FLAG_TEXT;
+    g_object_set (m_playerbin, "flags", flags, NULL);
+    gst_bin_add(GST_BIN(m_pipeline), m_playerbin);
+    if (m_pipeline && m_decodebin && m_audioGraph && m_videoGraph && m_audioPipe && m_videoPipe && m_playerbin)
         m_isValid = true;
     else
         m_backend->logMessage("Could not create pipeline for media object", Backend::Warning);
@@ -901,6 +907,54 @@ void MediaObject::setTotalTime(qint64 newTime)
     m_totalTime = newTime;
 
     emit totalTimeChanged(m_totalTime);
+}
+
+void MediaObject::getStreamsInfo()
+{
+    //processing audio streams
+    QList<AudioChannelDescription> audioChannels;
+    gint n_audio;
+    g_object_get (m_playerbin, "n-audio", &n_audio, NULL);
+    GstTagList *tags;
+
+    for(int i=0; i < n_audio; i++){
+        tags = NULL;
+        g_signal_emit_by_name (m_playerbin, "get-audio-tags", i, &tags);
+        if (tags) {
+            QHash<QByteArray, QVariant> properties;
+            gchar *str;
+            if (gst_tag_list_get_string (tags, GST_TAG_SHOW_NAME, &str)) {
+                properties["name"] = GstHelper::stringFromGCharPtr(str);
+            } else {
+                properties["name"] = "Unknown";
+            }
+            properties["description"] = "Audio Channel";
+            audioChannels.append(AudioChannelDescription(i,properties));
+
+        }
+    }
+    setAudioChannels(audioChannels);
+
+    //processing subtitle(text) streams
+    QList<SubtitleDescription> subtitles;
+    gint n_text;
+    g_object_get (m_playerbin, "n-text", &n_text, NULL);
+    for(int i=0; i < n_text; i++){
+        tags = NULL;
+        g_signal_emit_by_name (m_playerbin, "get-text-tags", i, &tags);
+        if (tags) {
+            QHash<QByteArray, QVariant> properties;
+            gchar *str;
+            if (gst_tag_list_get_string (tags, GST_TAG_SHOW_NAME, &str)) {
+                properties["name"] = GstHelper::stringFromGCharPtr(str);
+            } else {
+                properties["name"] = "Unknown";
+            }
+            properties["description"] = "Audio Channel";
+            subtitles.append(SubtitleDescription(i,properties));
+
+        }
+    }
 }
 
 /*
@@ -1384,7 +1438,12 @@ void MediaObject::handleBusMessage(const Message &message)
             GstState newState;
             GstState pendingState;
             gst_message_parse_state_changed (gstMessage, &oldState, &newState, &pendingState);
-
+            if (GST_MESSAGE_SRC (gstMessage) == GST_OBJECT (m_playerbin)) {
+                if (new_state == GST_STATE_PLAYING) {
+                    /* Once we are in the playing state, analyze the streams */
+                    getStreamsInfo();
+                }
+            }
             if (newState == pendingState)
                 return;
 
@@ -1613,7 +1672,9 @@ void MediaObject::notifyStateChange(Phonon::State newstate, Phonon::State oldsta
 //interface management
 bool MediaObject::hasInterface(Interface iface) const
 {
-    return iface == AddonInterface::TitleInterface;
+    return iface == AddonInterface::TitleInterface ||
+           iface == AddonInterface::AudioChannelInterface ||
+           iface == AddonInterface::SubtitleInterface;
 }
 
 QVariant MediaObject::interfaceCall(Interface iface, int command, const QList<QVariant> &params)
@@ -1642,6 +1703,32 @@ QVariant MediaObject::interfaceCall(Interface iface, int command, const QList<QV
                 default:
             break;
         }
+        case AudioChannelInterface:
+            switch (command) {
+            case availableAudioChannels:
+                return qVariantFromValue(_iface_availableAudioChannels());
+            case currentAudioChannel:
+                return qVariantFromValue(_iface_currentAudioChannel());
+            case setCurrentAudioChannel:
+                _iface_setCurrentAudioChannel(params.first().value<AudioChannelDescription>());
+                break;
+            default:
+                break;
+            }
+         case SubtitleInterface:
+            switch (command) {
+            case availableSubtitles:
+                return qVariantFromValue(_iface_availableSubtitles());
+            case currentSubtitle:
+                return qVariantFromValue(_iface_currentSubtitle());
+            case setCurrentSubtitle:
+                _iface_setCurrentSubtitle(params.first().value<SubtitleDescription>());
+                break;
+            default:
+                break;
+            }
+        default:
+            break;
     }
     return QVariant();
 }
@@ -1687,6 +1774,67 @@ void MediaObject::setTrack(int title)
         m_atEndOfStream = false;
         emit titleChanged(title);
         emit totalTimeChanged(totalTime());
+    }
+}
+
+QList<AudioChannelDescription> MediaObject::_iface_availableAudioChannels() const
+{
+    return m_audioChanels;
+}
+
+AudioChannelDescription MediaObject::_iface_currentAudioChannel()
+{
+    if (m_curentAudioChannelIndex < m_audioChanels.size()) {
+        return m_audioChanels[m_curentAudioChannelIndex];
+    }
+    return AudioChannelDescription();
+}
+
+void MediaObject::_iface_setCurrentAudioChannel(const AudioChannelDescription &channel)
+{
+    int index = m_audioChanels.indexOf(channel);
+    if (index >= 0){
+        g_object_set(m_playerbin, "current-audio", index, NULL);
+    }
+}
+
+void MediaObject::setAudioChannels(const QList<AudioChannelDescription> &channels)
+{
+    bool emitSignal = m_audioChanels.count() == chanels.count();
+    m_audioChanels = channels;
+    if(emitSignal) {
+        emit availableAudioChannelsChanged();
+    }
+}
+
+QList<SubtitleDescription> MediaObject::_iface_availableSubtitles() const
+{
+    return m_subtitles;
+}
+
+SubtitleDescription MediaObject::_iface_currentSubtitle()
+{
+    if (m_curentSubtitleIndex < m_subtitles.size()) {
+        return m_subtitles[m_curentSubtitleIndex];
+    }
+    return SubtitleDescription();
+
+}
+
+void MediaObject::_iface_setCurrentSubtitle(const SubtitleDescription &subtitle)
+{
+    int index = m_subtitles.indexOf(subtitle);
+    if (index >= 0){
+        g_object_set(m_playerbin, "current-text", index, NULL);
+    }
+}
+
+void MediaObject::setSubtitles(const QList<SubtitleDescription> &subtitiles)
+{
+    bool emitSignal = m_subtitles.count() == subtitiles.count();
+    m_subtitles = subtitiles;
+    if(emitSignal) {
+        emit availableSubtitlesChanged();
     }
 }
 
